@@ -165,7 +165,7 @@ void loop() {
     if (gotData) {
       Serial.println(BTInput);
       bt.write('/');
-
+      
       if (strcmp(BTInput, "LED OFF") == 0) {
         digitalWrite(LED_PIN, LOW);
         blinker.detach();
