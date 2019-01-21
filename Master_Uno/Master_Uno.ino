@@ -3,30 +3,39 @@
 #include "PCD8544.h"
 
 #define MAX_CHAR 15
-#define PIR_LED 13
-#define LCD_LED 9
+#define PIR_LED 8
+#define IR_LED A0
+#define LCD_LED A1
 
-SoftwareSerial masterBT_1(10, 11); // Master_1 RX & TX Pins
+SoftwareSerial masterBT_1(12, 13); // Master_1 RX & TX Pins
 //SoftwareSerial masterBT_2(8,9); // Master_2 RX & TX Pins
 
 SimpleTimer timer;
 SimpleTimer lcd_timer;
+SimpleTimer irTimer;
 
 PCD8544 lcd;
 
 volatile bool checkingTime = false;
 volatile bool displayLCDTime = false;
+volatile bool irTime = false;
+volatile bool PIR_state = false;
+
 int timeId = 0;
 int lcdTimeId = 0;
+int irTimeId = 0;
 
-volatile bool PIR_state = false;
 
 void isr_500ms() {
   checkingTime = true;
 }
 
-void isr_10ms(){
+void isr_200ms(){
   displayLCDTime = true;
+}
+
+void isr_50ms(){
+  irTime = true;
 }
 
 bool gettingUserInput(char s[]) {
@@ -66,7 +75,27 @@ bool gettingUserInput(char s[]) {
     } // end while()
     timer.enable(timeId);       // exit critical timing
   } // end ch == '+'
-
+  else if(ch == '-'){
+    int i=0;
+    while(Serial.available()){
+      ch = (char)Serial.read();
+      if(ch == '#'){
+        Serial.print("User command: ");
+        completeData = true;
+        break;
+      }
+      s[i++] = ch;
+      if (i == MAX_CHAR) {      // check if it's out of bound
+        Serial.print("Input is more than ");
+        Serial.print(MAX_CHAR);
+        Serial.println(" characters");
+        completeData = false;
+        break;
+      }
+    }
+    
+  }
+  
   return completeData;
 }
 
@@ -117,29 +146,34 @@ bool gettingBTInput(char s[]) {
   return completeData;
 }
 
-void displayLCD(){
-
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("01234567890123");
-  lcd.setCursor(0,3);
-  static unsigned int LCD_val = 0;
+void lcd_isr(){
+  static int count = 0;
+  static int lcd_pwm_val = 0;
   static int direction = 1;
-  analogWrite(LCD_LED,map(LCD_val,0,1023,0,255));
-  
-  if(LCD_val >= 1022){
+  if(count == 499){
+    count = 0;
+    lcd_dimming = false;
+  }
+  else if(count >= 250){
     direction = -1;
   }
-  else if(LCD_val <= 1){
+  else{
     direction = 1;
   }
-  LCD_val += direction;
-  lcd.print(LCD_val);
 
-  lcd.setCursor(0,4);
-  if(PIR_state) lcd.print("PIR is ON");
-  else          lcd.print("PIR is OFF");
+  lcd_pwm_val += direction;
+
+  analogWrite(LCD_LED, lcd_pwm_val);
   
+  count++;
+}
+
+void displayLCD(){
+
+  lcd.setCursor(10,1);
+  if(PIR_state) lcd.print("PIR:  ON");
+  else          lcd.print("PIR: OFF");
+
 }
 
 
@@ -150,19 +184,26 @@ void setup() {
 
   masterBT_1.begin(38400);
   lcd.begin(84, 48);
+  lcd.setCursor(0,0);
+  lcd.drawColumn(6,48);
+  lcd.setCursor(83,0);
+  lcd.drawColumn(6,48);
 
+  pinMode(IR_LED, INPUT);
   pinMode(PIR_LED, OUTPUT);
   pinMode(LCD_LED, OUTPUT);
   
   timeId = timer.setInterval(500, isr_500ms);   // call ISR every 500ms
-  lcdTimeId = lcd_timer.setInterval(1000, isr_10ms);
+  lcdTimeId = lcd_timer.setInterval(200, isr_200ms);
+  irTimeId = irTimer.setInterval(50, isr_50ms);
 }
 
 void loop() {
 
   timer.run();
   lcd_timer.run();
-
+  irTimer.run();
+  
   if (checkingTime) {
     char receivedInput = false;
     char userInput[MAX_CHAR] = "";
@@ -185,9 +226,6 @@ void loop() {
     if (masterBT_1.available()) {
       receivedInput = gettingBTInput(BTInput);
       if (receivedInput) {
-//        if(strcmp(BTInput,"")==0){
-//          Serial.println("Received Acknowledgement");
-//        }
         if(strcmp(BTInput,"PIR ON")==0){
           digitalWrite(PIR_LED, HIGH);
           PIR_state = true;
