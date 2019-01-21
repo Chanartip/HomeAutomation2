@@ -7,6 +7,8 @@
 #define IR_LED A0
 #define LCD_LED A1
 #define IR_IN_RANGE 100
+#define SERIAL_DATA 1
+#define BT_DATA 2
 
 SoftwareSerial masterBT_1(12, 13); // Master_1 RX & TX Pins
 //SoftwareSerial masterBT_2(8,9); // Master_2 RX & TX Pins
@@ -26,17 +28,18 @@ int irTimeId = 0;
 void isr_500ms() {
   char userInput[MAX_CHAR] = "";
   char BlueToothInput[MAX_CHAR] = "";
-  bool isSerialInput = checkSerialInput(userInput);
+  int isSerialInput = checkSerialInput(userInput);
   bool isBlueToothInput = checkBlueToothInput(BlueToothInput);
 
-  if (isSerialInput) {
+  if (isSerialInput == SERIAL_DATA) {
+    processUserCommand(userInput);
+  }
+  else if (isSerialInput == BT_DATA) {
     sendBlueToothData(userInput);
-    isSerialInput = false;
   }
 
   if (isBlueToothInput) {
     processBlueToothData(BlueToothInput);
-    isBlueToothInput = false;
   }
 }
 
@@ -47,17 +50,17 @@ void isr_200ms() {
 void isr_50ms() {
   volatile int IR_value = 0;
   static int count = 0;
-  
+
   IR_value = analogRead(IR_LED);
-  
-  if(IR_value > IR_IN_RANGE){
+
+  if (IR_value > IR_IN_RANGE) {
     digitalWrite(LCD_LED, HIGH);
     count = 99;
   }
-  else if(count > 0){
+  else if (count > 0) {
     count--;
   }
-  else if(count == 0){
+  else if (count == 0) {
     digitalWrite(LCD_LED, LOW);
     count = -1;
   }
@@ -66,13 +69,16 @@ void isr_50ms() {
 /**********************************************************************************************
     checkSerialInput
  **********************************************************************************************/
-bool checkSerialInput(char s[]) {
-  bool completeData = false;
-
+int checkSerialInput(char s[]) {
+  int source = -1;
+  
   if (Serial.available()) {
     char ch = Serial.read();
 
-    if (ch == '+') {
+    if (ch == '+') source = BT_DATA;
+    else if (ch == '-') source = SERIAL_DATA;
+
+    if ((ch == '+') || (ch == '-')) {
       int i = 0;
 
       // Collecting data from User's input
@@ -84,8 +90,14 @@ bool checkSerialInput(char s[]) {
         ch = (char)Serial.read(); // collect input
 
         if (ch == '#') {          // check if it's the end of command
-          Serial.print("Sending data: ");
-          completeData = true;
+          if (source == SERIAL_DATA) {
+            Serial.print("User's command: ");
+            Serial.println(s);
+          }
+          else if (source = BT_DATA) {
+            Serial.print("Sending data: ");
+            Serial.println(s);
+          }
           break;                  // finish collecting input
         }
 
@@ -99,19 +111,15 @@ bool checkSerialInput(char s[]) {
           Serial.print("Input is more than ");
           Serial.print(MAX_CHAR);
           Serial.println(" characters");
-          completeData = false;
           break;
         }
-
       } // end while()
+
       timer.enable(timeId);       // exit critical timing
-    } // end ch == '+'
-    //    else if (ch == '-') {
-    //      // On development process
-    //    }
+    } // end ch == '+' || ch == '-'
   } // end if Serial.available()
 
-  return completeData;
+  return source;
 }
 
 /**********************************************************************************************
@@ -172,12 +180,21 @@ bool checkBlueToothInput(char s[]) {
     sendBlueToothData
  **********************************************************************************************/
 void sendBlueToothData(char s[]) {
-  Serial.println(String(s));
   masterBT_1.write('+');
   masterBT_1.write(s);
   masterBT_1.write('#');
 }
-
+/**********************************************************************************************
+    processUserCommand
+ **********************************************************************************************/
+void processUserCommand(char s[]) {
+  if (strcmp(s, "LCD ON") == 0) {
+    digitalWrite(LCD_LED, HIGH);
+  }
+  else if (strcmp(s, "LCD OFF") == 0) {
+    digitalWrite(LCD_LED, LOW);
+  }
+}
 /**********************************************************************************************
     processBlueToothData
  **********************************************************************************************/
