@@ -2,16 +2,20 @@
 #include "SimpleTimer.h"
 #include "PCD8544.h"
 
-#define MAX_CHAR 15
 #define PIR_LED 8
 #define IR_LED A0
 #define LCD_LED A1
+#define DESK_1_LED A2
+#define DESK_2_LED A3
+#define DESK_3_LED A4
+
+#define MAX_CHAR 15
 #define IR_IN_RANGE 100
 #define SERIAL_DATA 1
 #define BT_DATA 2
 
 SoftwareSerial masterBT_1(12, 13); // Master_1 RX & TX Pins
-//SoftwareSerial masterBT_2(8,9); // Master_2 RX & TX Pins
+SoftwareSerial masterBT_2(10, 11); // Master_2 RX & TX Pins
 
 SimpleTimer timer;
 SimpleTimer lcd_timer;
@@ -20,7 +24,7 @@ SimpleTimer irTimer;
 PCD8544 lcd;
 
 volatile bool PIR_state = false;
-
+volatile bool completeTX = false;
 int timeId = 0;
 int lcdTimeId = 0;
 int irTimeId = 0;
@@ -71,8 +75,8 @@ void isr_50ms() {
  **********************************************************************************************/
 int checkSerialInput(char s[]) {
   int source = -1;
-  
-  if (Serial.available()) {
+
+  if (Serial.peek() > 0) {
     char ch = Serial.read();
 
     if (ch == '+') source = BT_DATA;
@@ -85,7 +89,7 @@ int checkSerialInput(char s[]) {
       //   began with '+' and end with '#'
       //   At the end print out confirmation
       //   Limit 15 characters(MAX_CHAR)
-      timer.disable(timeId);  // enter critical timimg
+      noInterrupts();             // enter critical timimg
       while (Serial.available()) {
         ch = (char)Serial.read(); // collect input
 
@@ -114,8 +118,7 @@ int checkSerialInput(char s[]) {
           break;
         }
       } // end while()
-
-      timer.enable(timeId);       // exit critical timing
+      interrupts();               // exit critical timing
     } // end ch == '+' || ch == '-'
   } // end if Serial.available()
 
@@ -128,52 +131,47 @@ int checkSerialInput(char s[]) {
 bool checkBlueToothInput(char s[]) {
   bool completeData = false;
 
-  if (masterBT_1.available()) {
-    char ch = masterBT_1.read();
-
-    if (ch == '/') {
-      int i = 0;
+  if (masterBT_1.isListening()) {
+    if (masterBT_1.read() == '/') {
 
       // Collecting data from User's input
       //   begin with '/' and end with '#'
       //   At the end print out confirmation
       //   Limit 15 characters(MAX_CHAR)
-      timer.disable(timeId);  // enter critical timimg
-      while (masterBT_1.available()) {
-        ch = (char)masterBT_1.read(); // collect input
-
-        if (ch == '#') {          // check if it's the end of command
-          if (i == 0) {
-            Serial.println("Received Acknowledgement");
-            completeData = false;
-          }
-          else {
-            Serial.print("Received data: ");
-            completeData = true;
-          }
-          break;                  // finish collecting input
+      if (masterBT_1.peek() == '#') {
+        Serial.println("Received Acknowledgement");
+        completeTX = true;
+        completeData = false;
+      }
+      else {
+        noInterrupts();             // enter critical timimg
+        for (int i = 0; (i < MAX_CHAR) && (masterBT_1.available() > 0) && (masterBT_1.peek() != '#'); i++) {
+          s[i] = (char)masterBT_1.read();
         }
-
-        s[i++] = ch;              // append into the string
-
-        // **** This condition hasn't been met yet
-        // since received data are validated on the other side
-        // by using the same MAX_CHAR to limit the characters
-        // to transmit.
-        if (i == MAX_CHAR) {      // check if it's out of bound
-          Serial.print("Input is more than ");
-          Serial.print(MAX_CHAR);
-          Serial.println(" characters");
-          completeData = false;
-          break;
-        }
-      } // end while()
-      timer.enable(timeId);       // exit critical timing
-
+        interrupts();               // exit critical timing
+        Serial.print("Received Data: ");
+        Serial.println(s);
+        completeData = true;
+      }
     } // end ch == '/'
-  } // if master.available()
-
-  return completeData;
+    
+    masterBT_2.listen();
+    return completeData;
+  }
+  else if (masterBT_2.isListening()) {
+    if (masterBT_2.peek() != -1) {
+      noInterrupts();
+      while (masterBT_2.available() > 0) {
+        Serial.write(masterBT_2.read());
+      }
+      interrupts();
+    }
+    else {
+      Serial.write('.');
+    }
+    masterBT_1.listen();
+    return false;
+  }
 }
 
 /**********************************************************************************************
@@ -195,6 +193,27 @@ void processUserCommand(char s[]) {
   else if (strcmp(s, "LCD OFF") == 0) {
     digitalWrite(LCD_LED, LOW);
   }
+  else if (strcmp(s, "DESK_1 ON") == 0) {
+    digitalWrite(DESK_1_LED, HIGH);
+  }
+  else if (strcmp(s, "DESK_1 OFF") == 0) {
+    digitalWrite(DESK_1_LED, LOW);
+  }
+  else if (strcmp(s, "DESK_2 ON") == 0) {
+    digitalWrite(DESK_2_LED, HIGH);
+  }
+  else if (strcmp(s, "DESK_2 OFF") == 0) {
+    digitalWrite(DESK_2_LED, LOW);
+  }
+  else if (strcmp(s, "DESK_3 ON") == 0) {
+    digitalWrite(DESK_3_LED, HIGH);
+  }
+  else if (strcmp(s, "DESK_3 OFF") == 0) {
+    digitalWrite(DESK_3_LED, LOW);
+  }
+  else if (strcmp(s, "HELP") == 0) {
+    displayCommand();
+  }
 }
 /**********************************************************************************************
     processBlueToothData
@@ -209,9 +228,6 @@ void processBlueToothData(char s[]) {
     digitalWrite(PIR_LED, LOW);
     PIR_state = false;
   }
-  // Because char s[] doesn't have null terminal at the end
-  // therefore String(s) would append '\n'
-  Serial.println(String(s));
   masterBT_1.write("+#");
 
 }
@@ -228,6 +244,25 @@ void displayLCD() {
     lcd.print("PIR: OFF");
 }
 
+void displayCommand() {
+  Serial.println("-------------------------------------------");
+  Serial.println("Communicating through Bluetooth: ");
+  Serial.println("+# checking");
+  Serial.println("+LED ON# turn on the led on NodeMCU");
+  Serial.println("+LED OFF# turn off the led on NodeMCU");
+  Serial.println("\nCommunicating through Serial Terminal: ");
+  Serial.println("-LCD ON# turn on LCD background light");
+  Serial.println("-LCD OFF# turn off LCD background light");
+  Serial.println("-DESK_1 ON# turn on white led strip");
+  Serial.println("-DESK_1 OFF# turn off white led strip");
+  Serial.println("-DESK_2 ON# turn on warm led strip");
+  Serial.println("-DESK_2 OFF# turn off warm led strip");
+  Serial.println("-DESK_3 ON# turn on under desk led strip");
+  Serial.println("-DESK_3 OFF# turn off under desk led strip");
+  Serial.println("-HELP# display command list");
+  Serial.println("-------------------------------------------");
+}
+
 /**********************************************************************************************
     Setup
  **********************************************************************************************/
@@ -235,8 +270,11 @@ void setup() {
   Serial.begin(9600);
   while (!Serial);
   Serial.println("Starting System\r\nWaiting for input...");
+  displayCommand();
 
   masterBT_1.begin(38400);
+  masterBT_2.begin(9600);
+  masterBT_1.listen();
 
   // Draw LCD Layout
   lcd.begin(84, 48);
@@ -250,6 +288,9 @@ void setup() {
   pinMode(IR_LED, INPUT);
   pinMode(PIR_LED, OUTPUT);
   pinMode(LCD_LED, OUTPUT);
+  pinMode(DESK_1_LED, OUTPUT);
+  pinMode(DESK_2_LED, OUTPUT);
+  pinMode(DESK_3_LED, OUTPUT);
 
   // Set Timers
   timeId = timer.setInterval(500, isr_500ms);
@@ -264,5 +305,4 @@ void loop() {
   timer.run();
   lcd_timer.run();
   irTimer.run();
-
 }
