@@ -132,22 +132,22 @@ void displayLCD() {
  **********************************************************************************************/
 void displayCommand() {
   Serial.println("-------------------------------------------");
-//  Serial.println("Communicating through Bluetooth: ");
-//  Serial.println("+# checking");
-//  Serial.println("+LED ON#");
-//  Serial.println("+LED OFF#");
-//  Serial.println("\nCommunicating through Serial Terminal: ");
-//  Serial.println("-LCD ON#");
-//  Serial.println("-LCD OFF#");
-//  Serial.println("-DESK_1 ON#");
-//  Serial.println("-DESK_1 OFF#");
-//  Serial.println("-DESK_2 ON#");
-//  Serial.println("-DESK_2 OFF#");
-//  Serial.println("-DESK_3 ON#");
-//  Serial.println("-DESK_3 OFF#");
-//  Serial.println("-DESK ON#");
-//  Serial.println("-DESK OFF#");
-//  Serial.println("-HELP#");
+  //  Serial.println("Communicating through Bluetooth: ");
+  //  Serial.println("+# checking");
+  //  Serial.println("+LED ON#");
+  //  Serial.println("+LED OFF#");
+  //  Serial.println("\nCommunicating through Serial Terminal: ");
+  //  Serial.println("-LCD ON#");
+  //  Serial.println("-LCD OFF#");
+  //  Serial.println("-DESK_1 ON#");
+  //  Serial.println("-DESK_1 OFF#");
+  //  Serial.println("-DESK_2 ON#");
+  //  Serial.println("-DESK_2 OFF#");
+  //  Serial.println("-DESK_3 ON#");
+  //  Serial.println("-DESK_3 OFF#");
+  //  Serial.println("-DESK ON#");
+  //  Serial.println("-DESK OFF#");
+  //  Serial.println("-HELP#");
   Serial.println("-------------------------------------------");
 }
 
@@ -368,8 +368,8 @@ bool gettingBluetoothInput(char s[]) {
     }
     else {
       Bluetooth_RX_Flush();
-//      Serial.println("Header from BT_1 is not '/'");
-//      Serial.flush();
+      //      Serial.println("Header from BT_1 is not '/'");
+      //      Serial.flush();
       return false;
     }
   }
@@ -427,7 +427,7 @@ void processBlueTooth_Data(char s[]) {
     Setup
  **********************************************************************************************/
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   while (!Serial);
   Serial.println("Starting System...");
   displayCommand();
@@ -479,22 +479,27 @@ void loop() {
           }
           else if (cmd == BT_SOURCE) {
             bool completeTX = false;
-            unsigned currentmillis = millis();
+            unsigned long previousmillis = millis();
             while (!completeTX) {
-              if(millis() - currentmillis >= 1000){
-                Serial.println("timeout");
+              unsigned long timeout = millis() - previousmillis;
+              if (timeout >= 1000) {
+//                Serial.print(timeout);
+//                Serial.flush();
                 break;
               }
-              sendBlueToothData(userInput);
-              completeTX = gettingBluetoothInput(BlueToothInput);
+              else {
+//              Serial.print("Sending: "); Serial.println(userInput); Serial.flush();
+                sendBlueToothData(userInput);
+                completeTX = gettingBluetoothInput(BlueToothInput);
+              }
             }
           }
 
           break;
         }
       case BT_SOURCE: {
-          gettingBluetoothInput(BlueToothInput);
-          processBlueTooth_Data(BlueToothInput);
+          bool gotAck = gettingBluetoothInput(BlueToothInput);
+          if (!gotAck) processBlueTooth_Data(BlueToothInput);
           break;
         }
       default: {

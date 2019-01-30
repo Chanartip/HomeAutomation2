@@ -7,12 +7,16 @@ Ticker blinker;
 #define LED_PIN 5          //GPIO5
 #define PIR_PIN 4          //GPIO4
 #define MAX_CHAR 15        //Maximum input characters
+#define MS_500 2500000
 
-volatile bool led_state = LOW;
 volatile bool checkingTime = false;
-
-// A blinker ISR
-//  called by Ticker (software timer)
+volatile bool updatePIR = false;
+volatile bool led_state = LOW;
+volatile bool pir_state = LOW;
+/*******************************************************************************
+   A blinker ISR
+   called by Ticker (software timer)
+ *******************************************************************************/
 void blink_led() {
   led_state = !led_state;
   digitalWrite(LED_PIN, led_state);
@@ -25,27 +29,41 @@ void blink_led() {
     500ms = 500,000us
     such that 500,000us * 5(ticks/us)
       = 2,500,000 ticks/us
- *  *Note: 5 ticks/us since using DIV16
+    Note: 5 ticks/us since using DIV16
  *******************************************************************************/
 void ICACHE_RAM_ATTR onTimerISR() {
   checkingTime = true;
-  timer1_write(2500000);
+  timer1_write(MS_500);
 }
 
-void pir_isr(void) {
-  volatile char pir_state = digitalRead(PIR_PIN);
-  Serial.print("Sending: ");
-  bt.write('/');
-  if (pir_state == HIGH){
-    bt.write("PIR ON");
-    Serial.println("PIR ON");
-  }
-  else{
-    bt.write("PIR OFF");
-    Serial.println("PIR OFF");
-  }
-  bt.write('#');
+/*******************************************************************************
+   pir_isr
 
+ *******************************************************************************/
+void pir_isr(void) {
+  updatePIR = true;
+  pir_state = digitalRead(PIR_PIN);
+}
+
+/*******************************************************************************
+   Bluetooth_RX_Flush
+
+ *******************************************************************************/
+void Bluetooth_RX_Flush() {
+  while (bt.available() > 0) {
+    bt.read();
+  }
+}
+
+/*******************************************************************************
+   sendBlueToothData
+
+ *******************************************************************************/
+void sendBlueToothData(char s[]) {
+  bt.write('/');
+  bt.write(s);
+  bt.write('#');
+  bt.flush();
 }
 
 /*******************************************************************************
@@ -54,48 +72,67 @@ void pir_isr(void) {
       checking first character. if it is '+', then continue receiving data.
       otherwise, ignore the rest of data.
  *******************************************************************************/
-bool gettingBTInput(char s[]) {
-  bool completeData = false;
-  char ch = bt.read();    // get the first char
-  if (ch == '+') {        // if '+', continue. stop, otherwise.
-    int i = 0;
-    noInterrupts();       // enter critical timing
+bool gettingBluetoothInput(char s[]) {
 
-    // Collecting data from bt's input
-    //  begin with '+' and end with '#'
-    //  At the end, print out confirmation
-    //  Limit 15 characters(MAX_CHAR)
-    while (bt.available() > 0) {
-      ch = bt.read();
-      if (ch == '#') {
-        if (i == 0) {
-          Serial.println("Received Acknowledge");
-          completeData = false;
+  if (bt.read() == '+') {
+    if (bt.peek() == '#') {
+      Bluetooth_RX_Flush();
+      Serial.println("Received Acknowledge");
+      Serial.flush();
+      return true;
+    }
+    else {
+      for (int i = 0; (i < MAX_CHAR) && (bt.available() > 0 ); i++) {
+        char ch = bt.read();
+
+        if (ch == '#') {
+          Bluetooth_RX_Flush();
+        }
+        else if ((i == MAX_CHAR - 1) && (ch != '#')) {
+          Bluetooth_RX_Flush();
+          Serial.print("Invalid input: ");
+          Serial.println(s);
+          Serial.flush();
         }
         else {
-          Serial.print("Received Data: ");
-          completeData = true;
+          s[i] = ch;
         }
-        break;
       }
-      s[i++] = ch;
+      Serial.print("Received Data: ");
+      Serial.println(s);
+      Serial.flush();
+      return false;
+    }
+  }
+  else {
+    Bluetooth_RX_Flush();
+    //    Serial.println("Input is not '+'");
+    //    Serial.flush();
+    return false;
+  }
 
-      // **** This condition hasn't been met yet
-      // since received data are validated on the other side
-      // by using the same MAX_CHAR to limit the characters
-      // to transmit.
-      if (i >= MAX_CHAR) {
-        Serial.println("Invalid Input");
-        completeData = false;
-        break;
-      }
+}
 
-    } // end while()
-    interrupts();       // exit critical timing
+/*******************************************************************************
+   processBlueTooth_Data
 
-  } // end ch == '+'
+ *******************************************************************************/
+void processBlueTooth_Data(char s[]) {
+  if (strcmp(s, "LED OFF") == 0) {
+    digitalWrite(LED_PIN, LOW);
+    blinker.detach();
+    Serial.println("LED should be off");
+    Serial.flush();
+  }
+  else if (strcmp(s, "LED ON") == 0) {
+    digitalWrite(LED_PIN, HIGH);
+    blinker.attach(2, blink_led);
+    Serial.println("LED should be on");
+    Serial.flush();
+  }
 
-  return completeData;
+  bt.write("/#");
+  bt.flush();
 }
 
 /*******************************************************************************
@@ -110,7 +147,7 @@ void setup() {
   // Setting Serial terminal
   //  with 9600 baud rate
   //  and wait until it's complete initiated.
-  Serial.begin(9600);
+  Serial.begin(115200);
   while (!Serial);
   Serial.println("NodeMCU Serial Port is ready.");
 
@@ -132,7 +169,7 @@ void setup() {
   blinker.attach(2, blink_led);
   timer1_attachInterrupt(onTimerISR);
   timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
-  timer1_write(2500000);
+  timer1_write(MS_500);
   interrupts();
 
   Serial.println("System is ready.");
@@ -150,32 +187,47 @@ void loop() {
   // Only get input every 500 ms
   //  checkingTime is update by onTimerISR set in setup()
   if (checkingTime) {
-    char gotData = false;                   // Flag to check if received data
-    char BTInput[MAX_CHAR] = "";            // An empty character array
+    char gotAck = false;                   // Flag to check if received data
+    char BlueToothInput[MAX_CHAR] = "";            // An empty character array
+    char BlueToothOutput[MAX_CHAR] = "";
 
     // There is an incoming input
-    //  Collect data into BTInput
+    //  Collect data into BlueToothInput
     if (bt.available() > 0) {
-      gotData = gettingBTInput(BTInput);
+      bool gotAck = gettingBluetoothInput(BlueToothInput);
+      if (!gotAck) processBlueTooth_Data(BlueToothInput);
     }
+    else if (updatePIR) {
+      bool completeTX = false;
+      unsigned long previousmillis = millis();
 
-    // Acknowledge the transmission
-    //  by sending '/' back to master Bluetooth
-    //  and then working on the input
-    if (gotData) {
-      Serial.println(BTInput);
-      if (strcmp(BTInput, "LED OFF") == 0) {
-        digitalWrite(LED_PIN, LOW);
-        blinker.detach();
-        Serial.println("LED should be off");
+      if (pir_state) {
+        strcpy(BlueToothOutput, "PIR ON");
       }
-      else if (strcmp(BTInput, "LED ON") == 0) {
-        digitalWrite(LED_PIN, HIGH);
-        blinker.attach(2, blink_led);
-        Serial.println("LED should be on");
+      else {
+        strcpy(BlueToothOutput, "PIR OFF");
       }
 
-      bt.write("/#");
+      while (!completeTX) {
+        unsigned long timeout = millis() - previousmillis;
+
+        if (timeout >= 1000) {
+//          Serial.print(timeout);
+//          Serial.println(" timeout");
+//          Serial.flush();
+          break;
+        }
+        else {
+//          Serial.print("Sending: "); Serial.println(BlueToothOutput); Serial.flush();
+          sendBlueToothData(BlueToothOutput);
+          completeTX = gettingBluetoothInput(BlueToothInput);
+//          yield();
+        }
+      }
+      updatePIR = false;
+    }
+    else {
+      Serial.print(".");
     }
 
     checkingTime = false;
