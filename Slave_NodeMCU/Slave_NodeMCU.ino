@@ -155,7 +155,7 @@ void loop() {
 
     // There is an incoming input
     //  Collect data into BTInput
-    if (bt.available()) {
+    if (bt.available() > 0) {
       gotData = gettingBTInput(BTInput);
     }
 
@@ -164,8 +164,6 @@ void loop() {
     //  and then working on the input
     if (gotData) {
       Serial.println(BTInput);
-      bt.write('/');
-      
       if (strcmp(BTInput, "LED OFF") == 0) {
         digitalWrite(LED_PIN, LOW);
         blinker.detach();
@@ -177,7 +175,7 @@ void loop() {
         Serial.println("LED should be on");
       }
 
-      bt.write('#');
+      bt.write("/#");
     }
 
     checkingTime = false;

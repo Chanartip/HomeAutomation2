@@ -1,176 +1,177 @@
+/*******************************************************************************
+    Home Automation Project
+    Board: Arduino Uno(Atmega328)
+    By     Chanartip.Soonthornwan
+    Email: Charles.s.aim@gmail.com
+ *******************************************************************************/
 #include "SoftwareSerial.h"     // Library for using multiple Serial
-#include "SimpleTimer.h"
-#include "PCD8544.h"
+#include "SimpleTimer.h"        // Library for timers
+#include "PCD8544.h"            // Library for Nokia5110 display
 
-#define PIR_LED 8
-#define IR_LED A0
-#define LCD_LED A1
-#define DESK_1_LED A2
-#define DESK_2_LED A3
-#define DESK_3_LED A4
+// Microcontroller Definition Pins
+#define PIR_LED       8         // LED for responding to PIR sensor from slaveBT
+#define IR_LED       A0         // IR Receiver LED analog input
+#define LCD_LED      A1         // LED backlight on Nokia5110
+#define DESK_1_LED   A2         // White LED Strip
+#define DESK_2_LED   A3         // Warm White LED Strip
+#define DESK_3_LED   A4         // Under desk LED Strip
 
-#define MAX_CHAR 15
-#define IR_IN_RANGE 100
-#define SERIAL_DATA 1
-#define BT_DATA 2
+// Other Definitions
+#define MAX_CHAR     15         // Lenght of Serial I/O Buffer
+#define IR_IN_RANGE 125         // Calibrated IR Analog Threshold value
+#define NO_SOURCE    -1
+#define SERIAL_SOURCE 0
+#define BT_SOURCE     1
+#define TIMEOUT       4
 
+/*******************************************************************************
+    SoftwareSerial Instances
+    provide multiple ways of communication
+    - Serial
+    - masterBT_1 communicates to SlaveBT_1 on NodeMCU(another device)
+    - slaveBT_2 communicate to HP_Laptop (or another smartdevice)
+ *******************************************************************************/
 SoftwareSerial masterBT_1(12, 13); // Master_1 RX & TX Pins
-SoftwareSerial masterBT_2(10, 11); // Master_2 RX & TX Pins
+SoftwareSerial slaveBT_2(10, 11);  // Master_2 RX & TX Pins
 
-SimpleTimer timer;
-SimpleTimer lcd_timer;
-SimpleTimer irTimer;
+/*******************************************************************************
+    Other Instnaces
+ *******************************************************************************/
+SimpleTimer timer;                // Checking Input Timer
+SimpleTimer lcd_timer;            // Updating Nokia5110 Timer
+SimpleTimer irTimer;              // Receiving IR sensor value Timer
 
-PCD8544 lcd;
+PCD8544 lcd;                      // Nokia5110 Instance
 
+/*******************************************************************************
+    Global Variables
+  Note: volatile variable is a variable that could be changed outside the scope
+       of programming in the time. In other word, its value could be often
+       changed because of hardware in real time.
+ *******************************************************************************/
+volatile int IR_value = 0;
+volatile bool checkingInputTime = false;
+volatile bool repeat = false;
 volatile bool PIR_state = false;
-volatile bool completeTX = false;
-int timeId = 0;
-int lcdTimeId = 0;
-int irTimeId = 0;
+volatile bool Desk_1_state = false;
+volatile bool Desk_2_state = false;
+volatile bool Desk_3_state = false;
 
+/*******************************************************************************
+    Interrupt Service Routines (ISR)
+ *******************************************************************************/
+// Checking input time
 void isr_500ms() {
-  char userInput[MAX_CHAR] = "";
-  char BlueToothInput[MAX_CHAR] = "";
-  int isSerialInput = checkSerialInput(userInput);
-  bool isBlueToothInput = checkBlueToothInput(BlueToothInput);
-
-  if (isSerialInput == SERIAL_DATA) {
-    processUserCommand(userInput);
-  }
-  else if (isSerialInput == BT_DATA) {
-    sendBlueToothData(userInput);
-  }
-
-  if (isBlueToothInput) {
-    processBlueToothData(BlueToothInput);
-  }
+  checkingInputTime = true;
+  repeat = true;
 }
 
+// Updating LCD time
 void isr_200ms() {
   displayLCD();
 }
 
-void isr_50ms() {
-  volatile int IR_value = 0;
+// Getting IR value time
+//  - constantly receiving input from IR_LED every 50ms.
+//    If there is an object in range of the IR sensor,
+//    it will turn on the Nokia5110 LED for 100*50ms = 5 seconds
+//    before turning off the LED.
+void isr_50ms()  {
   static int count = 0;
-
   IR_value = analogRead(IR_LED);
 
-  if (IR_value > IR_IN_RANGE) {
+  if ((IR_value > IR_IN_RANGE) && (count == -1)) {   // When an object is closer
     digitalWrite(LCD_LED, HIGH);
-    count = 99;
+    count = 99;                     // reset the counter value
   }
-  else if (count > 0) {
+  else if (count > 0) {             // keep counting down
     count--;
   }
-  else if (count == 0) {
-    digitalWrite(LCD_LED, LOW);
+  else if (count == 0) {            // reach 5000ms (5 seconds)
+    digitalWrite(LCD_LED, LOW);     // turn off the led
     count = -1;
   }
 }
 
 /**********************************************************************************************
-    checkSerialInput
+    displayLCD
  **********************************************************************************************/
-int checkSerialInput(char s[]) {
-  int source = -1;
+void displayLCD() {
 
-  if (Serial.peek() > 0) {
-    char ch = Serial.read();
+  lcd.setCursor(3, 1);
+  if (PIR_state)
+    lcd.print("PIR   :  ON");
+  else
+    lcd.print("PIR   : OFF");
 
-    if (ch == '+') source = BT_DATA;
-    else if (ch == '-') source = SERIAL_DATA;
+  lcd.setCursor(3, 2);
+  if (Desk_1_state)
+    lcd.print("Desk_1:  ON");
+  else
+    lcd.print("Desk_1: OFF");
 
-    if ((ch == '+') || (ch == '-')) {
-      int i = 0;
+  lcd.setCursor(3, 3);
+  if (Desk_2_state)
+    lcd.print("Desk_2:  ON");
+  else
+    lcd.print("Desk_2: OFF");
 
-      // Collecting data from User's input
-      //   began with '+' and end with '#'
-      //   At the end print out confirmation
-      //   Limit 15 characters(MAX_CHAR)
-      noInterrupts();             // enter critical timimg
-      while (Serial.available()) {
-        ch = (char)Serial.read(); // collect input
+  lcd.setCursor(3, 4);
+  if (Desk_3_state)
+    lcd.print("Desk_3:  ON");
+  else
+    lcd.print("Desk_3: OFF");
 
-        if (ch == '#') {          // check if it's the end of command
-          if (source == SERIAL_DATA) {
-            Serial.print("User's command: ");
-            Serial.println(s);
-          }
-          else if (source = BT_DATA) {
-            Serial.print("Sending data: ");
-            Serial.println(s);
-          }
-          break;                  // finish collecting input
-        }
-
-        s[i++] = ch;              // append into the string
-
-        // **** This condition hasn't been met yet
-        // since received data are validated on the other side
-        // by using the same MAX_CHAR to limit the characters
-        // to transmit.
-        if (i == MAX_CHAR) {      // check if it's out of bound
-          Serial.print("Input is more than ");
-          Serial.print(MAX_CHAR);
-          Serial.println(" characters");
-          break;
-        }
-      } // end while()
-      interrupts();               // exit critical timing
-    } // end ch == '+' || ch == '-'
-  } // end if Serial.available()
-
-  return source;
+  lcd.setCursor(3, 5);
+  lcd.print(IR_value);
+  lcd.print("\001");
 }
 
 /**********************************************************************************************
-    checkBlueToothInput
+    displayCommand
  **********************************************************************************************/
-bool checkBlueToothInput(char s[]) {
-  bool completeData = false;
+void displayCommand() {
+  Serial.println("-------------------------------------------");
+//  Serial.println("Communicating through Bluetooth: ");
+//  Serial.println("+# checking");
+//  Serial.println("+LED ON#");
+//  Serial.println("+LED OFF#");
+//  Serial.println("\nCommunicating through Serial Terminal: ");
+//  Serial.println("-LCD ON#");
+//  Serial.println("-LCD OFF#");
+//  Serial.println("-DESK_1 ON#");
+//  Serial.println("-DESK_1 OFF#");
+//  Serial.println("-DESK_2 ON#");
+//  Serial.println("-DESK_2 OFF#");
+//  Serial.println("-DESK_3 ON#");
+//  Serial.println("-DESK_3 OFF#");
+//  Serial.println("-DESK ON#");
+//  Serial.println("-DESK OFF#");
+//  Serial.println("-HELP#");
+  Serial.println("-------------------------------------------");
+}
 
-  if (masterBT_1.isListening()) {
-    if (masterBT_1.read() == '/') {
-
-      // Collecting data from User's input
-      //   begin with '/' and end with '#'
-      //   At the end print out confirmation
-      //   Limit 15 characters(MAX_CHAR)
-      if (masterBT_1.peek() == '#') {
-        Serial.println("Received Acknowledgement");
-        completeTX = true;
-        completeData = false;
-      }
-      else {
-        noInterrupts();             // enter critical timimg
-        for (int i = 0; (i < MAX_CHAR) && (masterBT_1.available() > 0) && (masterBT_1.peek() != '#'); i++) {
-          s[i] = (char)masterBT_1.read();
-        }
-        interrupts();               // exit critical timing
-        Serial.print("Received Data: ");
-        Serial.println(s);
-        completeData = true;
-      }
-    } // end ch == '/'
-    
-    masterBT_2.listen();
-    return completeData;
+/*******************************************************************************
+    Serial_RX_Flush
+      - to erase remaning data on Serial Buffer by
+        keep reading the serial until Serial.available() == 0
+ *******************************************************************************/
+void Serial_RX_Flush() {
+  while (Serial.available() > 0) {
+    Serial.read();
   }
-  else if (masterBT_2.isListening()) {
-    if (masterBT_2.peek() != -1) {
-      noInterrupts();
-      while (masterBT_2.available() > 0) {
-        Serial.write(masterBT_2.read());
-      }
-      interrupts();
+}
+
+void Bluetooth_RX_Flush() {
+  if (masterBT_1.isListening()) {
+    while (masterBT_1.available() > 0) {
+      masterBT_1.read();                 // Flushing the RX buffer
     }
-    else {
-      Serial.write('.');
+  }
+  else if (slaveBT_2.isListening()) {
+    while (slaveBT_2.available() > 0) {
+      slaveBT_2.read();                  // Flushing the RX buffer
     }
-    masterBT_1.listen();
-    return false;
   }
 }
 
@@ -178,11 +179,18 @@ bool checkBlueToothInput(char s[]) {
     sendBlueToothData
  **********************************************************************************************/
 void sendBlueToothData(char s[]) {
-  masterBT_1.write('+');
-  masterBT_1.write(s);
-  masterBT_1.write('#');
+  if (masterBT_1.isListening()) {
+    masterBT_1.write('+');
+    masterBT_1.write(s);
+    masterBT_1.write('#');
+    masterBT_1.flush();
+  }
+  else if (slaveBT_2.isListening()) {
+    slaveBT_2.write('@');
+    slaveBT_2.write('#');
+    slaveBT_2.flush();
+  }
 }
-
 /**********************************************************************************************
     processUserCommand
  **********************************************************************************************/
@@ -194,73 +202,225 @@ void processUserCommand(char s[]) {
     digitalWrite(LCD_LED, LOW);
   }
   else if (strcmp(s, "DESK_1 ON") == 0) {
+    Desk_1_state = true;
     digitalWrite(DESK_1_LED, HIGH);
   }
   else if (strcmp(s, "DESK_1 OFF") == 0) {
+    Desk_1_state = false;
     digitalWrite(DESK_1_LED, LOW);
   }
   else if (strcmp(s, "DESK_2 ON") == 0) {
+    Desk_2_state = true;
     digitalWrite(DESK_2_LED, HIGH);
   }
   else if (strcmp(s, "DESK_2 OFF") == 0) {
+    Desk_2_state = false;
     digitalWrite(DESK_2_LED, LOW);
   }
   else if (strcmp(s, "DESK_3 ON") == 0) {
+    Desk_3_state = true;
     digitalWrite(DESK_3_LED, HIGH);
   }
   else if (strcmp(s, "DESK_3 OFF") == 0) {
+    Desk_3_state = false;
+    digitalWrite(DESK_3_LED, LOW);
+  }
+  else if (strcmp(s, "DESK ON") == 0) {
+    Desk_1_state = true;
+    Desk_2_state = true;
+    Desk_3_state = true;
+    digitalWrite(DESK_1_LED, HIGH);
+    digitalWrite(DESK_2_LED, HIGH);
+    digitalWrite(DESK_3_LED, HIGH);
+  }
+  else if (strcmp(s, "DESK OFF") == 0) {
+    Desk_1_state = false;
+    Desk_2_state = false;
+    Desk_3_state = false;
+    digitalWrite(DESK_1_LED, LOW);
+    digitalWrite(DESK_2_LED, LOW);
     digitalWrite(DESK_3_LED, LOW);
   }
   else if (strcmp(s, "HELP") == 0) {
     displayCommand();
   }
 }
+
+/*******************************************************************************
+    checkingInputSource
+      - Checking if there is a data available from which communication
+      - If there isn't incoming data from masterBT_1, swiching turn to slaveBT_2
+      and vise versa.
+      - Disadvantage is everytime listen() is called, it erases info in
+      SoftSerial's buffer.
+ *******************************************************************************/
+int checkingInputSource() {
+  if (Serial.available() > 0) {
+    return SERIAL_SOURCE;
+  }
+  else if (masterBT_1.isListening()) {
+    if (masterBT_1.available() > 0) {
+      return BT_SOURCE;
+    }
+    else {
+      slaveBT_2.listen();
+    }
+  }
+  else if (slaveBT_2.isListening()) {
+    if (slaveBT_2.available() > 0) {
+      return BT_SOURCE;
+    }
+    else {
+      masterBT_1.listen();
+    }
+  }
+
+  return NO_SOURCE;
+}
+
+/*******************************************************************************
+    gettingUserInput
+    - This function could be called when Serial.available() > 0, or there is
+    a data in Serial Buffer.
+    Input: char s[] - a character string container
+    Output: char s[] - data after chopping header and tailer of String
+                       data on Serial.
+ *******************************************************************************/
+int gettingUserInput(char s[]) {
+  int source = NO_SOURCE;
+
+  // Checking source of header
+  char ch = Serial.read();      // Read the header
+
+  if (ch == '+') {              // Incoming input is for masterBT_1
+    source = BT_SOURCE;
+    masterBT_1.listen();
+  }
+  else if (ch == '-') {         // Incoming input is for the microcontroller itself
+    source = SERIAL_SOURCE;
+  }
+  else {                        // Invalid input
+    Serial_RX_Flush();          // eliminate the data on the buffer
+    return NO_SOURCE;           // exit the function
+  }
+
+  /*
+    Receiving data from the character after the header until
+    the MAX_CHAR -1 character.
+    - Characters beyond MAX_CHAR-1 will be discarded.
+    - Characters beyond '#' will be discarded since '#' is the tailer.
+  */
+  for (int i = 0; (i < MAX_CHAR) && (Serial.available() > 0); i++) {
+    ch = Serial.read();
+    if (ch == '#') {
+      Serial_RX_Flush();
+    }
+    else if ((i == MAX_CHAR - 1) && (ch != '#')) {
+      Serial_RX_Flush();
+      Serial.println("Invalid input\n Type -HELP# for more information");
+      Serial.flush();
+    }
+    else {
+      s[i] = ch;
+    }
+  }
+
+  Serial.print("Serial Input is: ");
+  Serial.println(s);
+  Serial.flush();
+  return source;
+}
+
+/*******************************************************************************
+    gettingBluetoothInput
+ *******************************************************************************/
+bool gettingBluetoothInput(char s[]) {
+  if (masterBT_1.isListening()) {
+
+    if (masterBT_1.read() == '/') {           // Find the Header
+      if (masterBT_1.peek() == '#') {         // Find the Tailer (Acknowledge)
+        Bluetooth_RX_Flush();
+        Serial.println("Received Acknowledgement");
+        Serial.flush();
+        return true;
+      }
+      else {
+        for (int i = 0; (i < MAX_CHAR) && (masterBT_1.available() > 0); i++) {
+          char ch = masterBT_1.read();
+
+          if (ch == '#') {
+            Bluetooth_RX_Flush();
+          }
+          else if ((i == MAX_CHAR - 1) && (ch != '#')) {
+            Bluetooth_RX_Flush();
+            Serial.println("Invalid input\n Type -HELP# for more information");
+            Serial.flush();
+          }
+          else {
+            s[i] = ch;
+          }
+        }
+        Serial.print("Received BT_1 Data: ");
+        Serial.println(s);
+        Serial.flush();
+        return false;
+      }
+    }
+    else {
+      Bluetooth_RX_Flush();
+//      Serial.println("Header from BT_1 is not '/'");
+//      Serial.flush();
+      return false;
+    }
+  }
+  else if (slaveBT_2.isListening()) {
+
+    if (slaveBT_2.read() == '/') {
+      Bluetooth_RX_Flush();
+      return false;
+    }
+    else {
+      for (int i = 0; (i < MAX_CHAR) && (slaveBT_2.available() > 0); i++) {
+        s[i] = (char)slaveBT_2.read();
+      }
+      Bluetooth_RX_Flush();
+      Serial.print("Received BT_2 Data: ");
+      Serial.println(s);
+      Serial.flush();
+      return false;
+    }
+
+  }
+}
+
 /**********************************************************************************************
     processBlueToothData
  **********************************************************************************************/
-void processBlueToothData(char s[]) {
+void processBlueTooth_Data(char s[]) {
+  if (masterBT_1.isListening()) {
+    if (strcmp(s, "PIR ON") == 0) {
+      digitalWrite(PIR_LED, HIGH);
+      PIR_state = true;
+    }
+    else if (strcmp(s, "PIR OFF") == 0) {
+      digitalWrite(PIR_LED, LOW);
+      PIR_state = false;
+    }
 
-  if (strcmp(s, "PIR ON") == 0) {
-    digitalWrite(PIR_LED, HIGH);
-    PIR_state = true;
+    masterBT_1.write("+#");
+    masterBT_1.flush();
+
   }
-  else if (strcmp(s, "PIR OFF") == 0) {
-    digitalWrite(PIR_LED, LOW);
-    PIR_state = false;
+  else if (slaveBT_2.isListening()) {
+    if (strcmp(s, "AimAim") == 0) {
+      Serial.println("We got AimAim");
+      Serial.flush();
+    }
+
+    slaveBT_2.write("@#");
+    slaveBT_2.flush();
+
   }
-  masterBT_1.write("+#");
-
-}
-
-/**********************************************************************************************
-    displayLCD
- **********************************************************************************************/
-void displayLCD() {
-
-  lcd.setCursor(10, 1);
-  if (PIR_state)
-    lcd.print("PIR:  ON");
-  else
-    lcd.print("PIR: OFF");
-}
-
-void displayCommand() {
-  Serial.println("-------------------------------------------");
-  Serial.println("Communicating through Bluetooth: ");
-  Serial.println("+# checking");
-  Serial.println("+LED ON# turn on the led on NodeMCU");
-  Serial.println("+LED OFF# turn off the led on NodeMCU");
-  Serial.println("\nCommunicating through Serial Terminal: ");
-  Serial.println("-LCD ON# turn on LCD background light");
-  Serial.println("-LCD OFF# turn off LCD background light");
-  Serial.println("-DESK_1 ON# turn on white led strip");
-  Serial.println("-DESK_1 OFF# turn off white led strip");
-  Serial.println("-DESK_2 ON# turn on warm led strip");
-  Serial.println("-DESK_2 OFF# turn off warm led strip");
-  Serial.println("-DESK_3 ON# turn on under desk led strip");
-  Serial.println("-DESK_3 OFF# turn off under desk led strip");
-  Serial.println("-HELP# display command list");
-  Serial.println("-------------------------------------------");
 }
 
 /**********************************************************************************************
@@ -269,11 +429,11 @@ void displayCommand() {
 void setup() {
   Serial.begin(9600);
   while (!Serial);
-  Serial.println("Starting System\r\nWaiting for input...");
+  Serial.println("Starting System...");
   displayCommand();
 
   masterBT_1.begin(38400);
-  masterBT_2.begin(9600);
+  slaveBT_2.begin(9600);
   masterBT_1.listen();
 
   // Draw LCD Layout
@@ -282,7 +442,6 @@ void setup() {
   lcd.drawColumn(6, 48);
   lcd.setCursor(83, 0);
   lcd.drawColumn(6, 48);
-  lcd.setCursor(1, 0);
 
   // Setup I/O Pins
   pinMode(IR_LED, INPUT);
@@ -293,9 +452,9 @@ void setup() {
   pinMode(DESK_3_LED, OUTPUT);
 
   // Set Timers
-  timeId = timer.setInterval(500, isr_500ms);
-  lcdTimeId = lcd_timer.setInterval(200, isr_200ms);
-  irTimeId = irTimer.setInterval(50, isr_50ms);
+  timer.setInterval(500, isr_500ms);
+  lcd_timer.setInterval(200, isr_200ms);
+  irTimer.setInterval(50, isr_50ms);
 }
 
 /**********************************************************************************************
@@ -305,4 +464,45 @@ void loop() {
   timer.run();
   lcd_timer.run();
   irTimer.run();
+
+  if (checkingInputTime) {
+    char userInput[MAX_CHAR] = "";
+    char BlueToothInput[MAX_CHAR] = "";
+    int inputFrom = checkingInputSource();
+
+    switch (inputFrom) {
+      case SERIAL_SOURCE: {
+          int cmd = gettingUserInput(userInput);
+
+          if (cmd == SERIAL_SOURCE) {
+            processUserCommand(userInput);
+          }
+          else if (cmd == BT_SOURCE) {
+            bool completeTX = false;
+            unsigned currentmillis = millis();
+            while (!completeTX) {
+              if(millis() - currentmillis >= 1000){
+                Serial.println("timeout");
+                break;
+              }
+              sendBlueToothData(userInput);
+              completeTX = gettingBluetoothInput(BlueToothInput);
+            }
+          }
+
+          break;
+        }
+      case BT_SOURCE: {
+          gettingBluetoothInput(BlueToothInput);
+          processBlueTooth_Data(BlueToothInput);
+          break;
+        }
+      default: {
+          Serial.print(".");
+          break;
+        }
+    }
+
+    checkingInputTime = false;
+  }
 }
