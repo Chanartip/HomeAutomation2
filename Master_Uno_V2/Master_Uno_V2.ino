@@ -61,13 +61,14 @@ volatile bool Desk_3_state = false;
     Interrupt Service Routines (ISR)
  *******************************************************************************/
 // Checking input time
-void isr_500ms() {
-  checkingInputTime = true;
-  repeat = true;
-}
+//void isr_100ms() {
+//  checkingInputTime = true;
+//  repeat = true;
+//}
 
 // Updating LCD time
 void isr_200ms() {
+  checkingInputTime = true;
   displayLCD();
 }
 
@@ -452,7 +453,7 @@ void setup() {
   pinMode(DESK_3_LED, OUTPUT);
 
   // Set Timers
-  timer.setInterval(500, isr_500ms);
+//  timer.setInterval(100, isr_100ms);
   lcd_timer.setInterval(200, isr_200ms);
   irTimer.setInterval(50, isr_50ms);
 }
@@ -480,30 +481,26 @@ void loop() {
           else if (cmd == BT_SOURCE) {
             bool completeTX = false;
             unsigned long previousmillis = millis();
-            while (!completeTX) {
-              unsigned long timeout = millis() - previousmillis;
-              if (timeout >= 1000) {
-//                Serial.print(timeout);
-//                Serial.flush();
-                break;
-              }
-              else {
-//              Serial.print("Sending: "); Serial.println(userInput); Serial.flush();
-                sendBlueToothData(userInput);
-                completeTX = gettingBluetoothInput(BlueToothInput);
-              }
+
+            for(int i=0; i<5 && (completeTX == false); i++){
+              unsigned long prev_ms = millis();
+              sendBlueToothData(userInput);
+              while(millis()-prev_ms < 50);
+              completeTX = gettingBluetoothInput(BlueToothInput);
             }
+            
           }
 
           break;
         }
+        
       case BT_SOURCE: {
-          bool gotAck = gettingBluetoothInput(BlueToothInput);
-          if (!gotAck) processBlueTooth_Data(BlueToothInput);
+          gettingBluetoothInput(BlueToothInput);
+          processBlueTooth_Data(BlueToothInput);
           break;
         }
       default: {
-          Serial.print(".");
+//          Serial.print(".");
           break;
         }
     }

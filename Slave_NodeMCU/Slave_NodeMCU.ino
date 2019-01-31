@@ -56,10 +56,10 @@ void Bluetooth_RX_Flush() {
 }
 
 /*******************************************************************************
-   sendBlueToothData
+   sendBluetoothData
 
  *******************************************************************************/
-void sendBlueToothData(char s[]) {
+void sendBluetoothData(char s[]) {
   bt.write('/');
   bt.write(s);
   bt.write('#');
@@ -93,6 +93,7 @@ bool gettingBluetoothInput(char s[]) {
           Serial.print("Invalid input: ");
           Serial.println(s);
           Serial.flush();
+          return false;
         }
         else {
           s[i] = ch;
@@ -114,10 +115,10 @@ bool gettingBluetoothInput(char s[]) {
 }
 
 /*******************************************************************************
-   processBlueTooth_Data
+   processBluetooth_Data
 
  *******************************************************************************/
-void processBlueTooth_Data(char s[]) {
+void processBluetooth_Data(char s[]) {
   if (strcmp(s, "LED OFF") == 0) {
     digitalWrite(LED_PIN, LOW);
     blinker.detach();
@@ -195,7 +196,7 @@ void loop() {
     //  Collect data into BlueToothInput
     if (bt.available() > 0) {
       bool gotAck = gettingBluetoothInput(BlueToothInput);
-      if (!gotAck) processBlueTooth_Data(BlueToothInput);
+      if (!gotAck) processBluetooth_Data(BlueToothInput);
     }
     else if (updatePIR) {
       bool completeTX = false;
@@ -207,27 +208,19 @@ void loop() {
       else {
         strcpy(BlueToothOutput, "PIR OFF");
       }
+      Serial.println(BlueToothOutput);
 
-      while (!completeTX) {
-        unsigned long timeout = millis() - previousmillis;
-
-        if (timeout >= 1000) {
-//          Serial.print(timeout);
-//          Serial.println(" timeout");
-//          Serial.flush();
-          break;
-        }
-        else {
-//          Serial.print("Sending: "); Serial.println(BlueToothOutput); Serial.flush();
-          sendBlueToothData(BlueToothOutput);
-          completeTX = gettingBluetoothInput(BlueToothInput);
-//          yield();
-        }
+      for(int i=0; i<3 && (!completeTX); i++){
+        unsigned long prev_ms = millis();
+        sendBluetoothData(BlueToothOutput);
+        while((millis()-prev_ms < 50) && (bt.available() == 0));
+        completeTX = gettingBluetoothInput(BlueToothInput);
       }
+
       updatePIR = false;
     }
     else {
-      Serial.print(".");
+//      Serial.print(".");
     }
 
     checkingTime = false;
